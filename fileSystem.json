@@ -1,0 +1,46 @@
+{
+  "name": "root",
+  "type": "folder",
+  "children": [
+    {
+      "name": "Documents",
+      "type": "folder",
+      "children": [
+        { "name": "resume.pdf", "type": "file" },
+        { "name": "notes.txt", "type": "file" },
+        {
+          "name": "Projects",
+          "type": "folder",
+          "children": [
+            { "name": "project1.zip", "type": "file" },
+            { "name": "README.md", "type": "file" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Images",
+      "type": "folder",
+      "children": [
+        { "name": "photo1.jpg", "type": "file" },
+        { "name": "photo2.png", "type": "file" },
+        {
+          "name": "Vacation",
+          "type": "folder",
+          "children": [
+            { "name": "beach.jpg", "type": "file" },
+            { "name": "sunset.jpg", "type": "file" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Videos",
+      "type": "folder",
+      "children": [
+        { "name": "movie.mp4", "type": "file" },
+        { "name": "tutorial.avi", "type": "file" }
+      ]
+    }
+  ]
+}
