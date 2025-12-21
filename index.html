@@ -252,11 +252,36 @@
         class FileSystemService {
             static async loadFolder(path = '') {
                 try {
-                    const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+                    const baseUrl = 'https://l0mfi5f7ue.execute-api.us-east-1.amazonaws.com/prod';
+                    const response = await fetch(`${baseUrl}/files?path=${encodeURIComponent(path)}`);
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    return await response.json();
+                    
+                    const data = await response.json();
+                    
+                    // Convert AWS API format to UI expected format
+                    const children = [
+                        ...data.folders.map(folder => ({
+                            name: folder.name,
+                            type: 'folder',
+                            children: [],
+                            fileCount: 0,
+                            folderCount: 0
+                        })),
+                        ...data.files.map(file => ({
+                            name: file.name,
+                            type: 'file',
+                            size: file.size || 0,
+                            modified: file.lastModified || new Date()
+                        }))
+                    ];
+                    
+                    return {
+                        name: path ? path.split('/').pop() : 'root',
+                        type: 'folder',
+                        children
+                    };
                 } catch (error) {
                     console.error('Failed to load folder:', error);
                     throw error;
@@ -264,17 +289,9 @@
             }
 
             static async moveFiles(files, targetPath) {
-                try {
-                    const response = await fetch('/api/move', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ files, targetPath })
-                    });
-                    return response.ok;
-                } catch (error) {
-                    console.error('Failed to move files:', error);
-                    return false;
-                }
+                // Move functionality not implemented in AWS backend yet
+                console.log('Move files:', files, 'to:', targetPath);
+                return false;
             }
         }
 
@@ -669,14 +686,32 @@
             const [moveData, setMoveData] = useState(null);
             const [showMoveDialog, setShowMoveDialog] = useState(false);
 
+            // Hash-based routing
+            useEffect(() => {
+                const handleHashChange = () => {
+                    const hash = window.location.hash.slice(1); // Remove #
+                    const path = hash ? hash.split('/').filter(p => p) : [];
+                    setCurrentPath(path);
+                };
+
+                // Load initial path from URL
+                handleHashChange();
+                
+                // Listen for hash changes
+                window.addEventListener('hashchange', handleHashChange);
+                return () => window.removeEventListener('hashchange', handleHashChange);
+            }, []);
+
             const handleNavigation = (newPath) => {
-                setCurrentPath(newPath);
+                const hash = newPath.length > 0 ? '#' + newPath.join('/') : '#';
+                window.location.hash = hash;
             };
 
             const handleBack = () => {
                 if (currentPath.length > 0) {
                     const newPath = currentPath.slice(0, -1);
-                    setCurrentPath(newPath);
+                    const hash = newPath.length > 0 ? '#' + newPath.join('/') : '#';
+                    window.location.hash = hash;
                 }
             };
 
