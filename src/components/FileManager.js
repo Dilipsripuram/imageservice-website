@@ -279,7 +279,7 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
 }
 
 // Tree View Component
-function TreeView({ onNavigate, onDrop }) {
+function TreeView({ onNavigate, onDrop, refreshKey }) {
     const [treeData, setTreeData] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [dragOverPath, setDragOverPath] = useState(null);
@@ -315,7 +315,7 @@ function TreeView({ onNavigate, onDrop }) {
             }
         };
         loadTree();
-    }, []);
+    }, [refreshKey]);
 
     const renderTreeNode = (node, path = []) => {
         if (!node || node.type !== 'folder') return null;
@@ -434,7 +434,7 @@ function FileManager({ currentPath, onNavigate }) {
                     </button>
                 </div>
                 <div className="tree-container">
-                    <TreeView onNavigate={onNavigate} onDrop={handleTreeDrop} />
+                    <TreeView key={refreshKey} onNavigate={onNavigate} onDrop={handleTreeDrop} refreshKey={refreshKey} />
                 </div>
             </div>
             <div className="main">
