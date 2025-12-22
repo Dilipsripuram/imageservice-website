@@ -1,6 +1,7 @@
 {
   "name": "image-service-website",
   "version": "1.0.0",
+  "homepage": "https://dilipsripuram.github.io/imageservice-website",
   "description": "Image Service Asset Management System",
   "private": true,
   "dependencies": {
