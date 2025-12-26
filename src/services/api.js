@@ -137,6 +137,22 @@ class ApiService {
             throw error;
         }
     }
+
+    async loadImages(folderPath = '', limit = 20, offset = 0) {
+        try {
+            const url = `${this.baseUrl}/images?folder=${encodeURIComponent(folderPath)}&limit=${limit}&offset=${offset}`;
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Failed to load images:', error);
+            throw error;
+        }
+    }
 }
 
 // Export as default for ES6 modules
