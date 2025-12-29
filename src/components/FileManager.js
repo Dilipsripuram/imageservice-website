@@ -24,8 +24,7 @@ function MoveDialog({ isOpen, files, targetFolder, onConfirm, onCancel }) {
 }
 
 // Content View Component
-function ContentView({ currentPath, onNavigate, onRefresh }) {
-    const [folder, setFolder] = useState(null);
+function ContentView({ currentFolder, onRefresh, onImagesChange }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [selectedFiles, setSelectedFiles] = useState(new Set());
@@ -42,27 +41,41 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
     const [lastClickedIndex, setLastClickedIndex] = useState(null);
     const [loadedImageCount, setLoadedImageCount] = useState(0);
     const [hasMoreImages, setHasMoreImages] = useState(false);
+    const [lastImageKey, setLastImageKey] = useState(null);
+    
+    // Cache for images by folderId
+    const [imageCache, setImageCache] = useState(new Map());
 
     const handleFileUpload = async (event) => {
         const files = Array.from(event.target.files);
-        if (files.length === 0) return;
+        if (files.length === 0 || !currentFolder) return;
 
         setUploading(true);
         setUploadProgress({ current: 0, total: files.length });
         
         try {
-            const targetFolder = currentPath.join('/');
+            const result = await apiService.uploadFiles(
+                currentFolder.folderId, 
+                files,
+                (current, total) => {
+                    setUploadProgress({ current, total });
+                }
+            );
             
-            // Process files in batches for better UX
-            const batchSize = 5;
-            for (let i = 0; i < files.length; i += batchSize) {
-                const batch = files.slice(i, i + batchSize);
-                await apiService.uploadFiles(targetFolder, batch);
-                setUploadProgress({ current: Math.min(i + batchSize, files.length), total: files.length });
-            }
+            setUploadProgress({ current: files.length, total: files.length });
+            loadImages(); // Reload images
             
-            onRefresh();
+            // Clear cache for current folder to force refresh
+            setImageCache(prev => {
+                const newCache = new Map(prev);
+                newCache.delete(currentFolder.folderId);
+                return newCache;
+            });
             event.target.value = '';
+            
+            if (result.failedUploads && result.failedUploads.length > 0) {
+                alert(`Upload completed with ${result.failedUploads.length} failures`);
+            }
         } catch (error) {
             alert('Upload failed: ' + error.message);
         } finally {
@@ -72,48 +85,55 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
     };
 
     useEffect(() => {
-        if (currentPath.length === 0) {
-            setFolder(null);
-            setLoading(false);
-            return;
-        }
-
-        setLoading(true);
-        setError(null);
-
-        apiService.loadFolder(currentPath.join('/'))
-            .then(data => {
-                setFolder(data);
-                setLoading(false);
-            })
-            .catch(err => {
-                setError(err.message);
-                setLoading(false);
-            });
-    }, [currentPath]);
-
-    useEffect(() => {
         setSelectedFiles(new Set());
         setSelectedImage(null);
-        setLoadedImageCount(0);
-        loadImages();
-    }, [currentPath]);
+        
+        if (currentFolder) {
+            // Check cache first
+            const cached = imageCache.get(currentFolder.folderId);
+            if (cached) {
+                setImages(cached.images);
+                setLoadedImageCount(cached.images.length);
+                setHasMoreImages(cached.hasMore);
+                setLastImageKey(cached.nextKey);
+                if (onImagesChange) onImagesChange(cached.images);
+            } else {
+                setLoadedImageCount(0);
+                setImages([]);
+                setLastImageKey(null);
+                loadImages();
+            }
+        }
+    }, [currentFolder]);
 
     const loadImages = async (append = false) => {
-        if (currentPath.length === 0) return;
+        if (!currentFolder) return;
         
         try {
-            const offset = append ? loadedImageCount : 0;
-            const data = await apiService.loadImages(currentPath.join('/'), imagesPerPage, offset);
+            const lastKey = append ? lastImageKey : null;
+            const data = await apiService.loadImages(currentFolder.folderId, imagesPerPage, lastKey);
             
+            let newImages;
             if (append) {
-                setImages(prev => [...prev, ...(data.images || [])]);
+                newImages = [...images, ...(data.images || [])];
+                setImages(newImages);
             } else {
-                setImages(data.images || []);
+                newImages = data.images || [];
+                setImages(newImages);
             }
             
-            setLoadedImageCount(offset + (data.images?.length || 0));
+            // Update cache
+            setImageCache(prev => new Map(prev.set(currentFolder.folderId, {
+                images: newImages,
+                hasMore: data.hasMore || false,
+                nextKey: data.nextKey || null
+            })));
+            
+            setLoadedImageCount(prev => append ? prev + (data.images?.length || 0) : (data.images?.length || 0));
             setHasMoreImages(data.hasMore || false);
+            setLastImageKey(data.nextKey || null);
+            
+            if (onImagesChange) onImagesChange(newImages);
         } catch (error) {
             console.error('Failed to load images:', error);
         }
@@ -129,38 +149,55 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
     };
 
     const handleFileClick = (fileName, index, event) => {
-        if (isImageFile(fileName)) {
-            if (event.shiftKey && lastClickedIndex !== null) {
-                // Shift+click: select range
-                const start = Math.min(lastClickedIndex, index);
-                const end = Math.max(lastClickedIndex, index);
-                const newSelected = new Set(selectedFiles);
-                
-                const imageFiles = folder.children.filter(item => item.type === 'file' && isImageFile(item.name));
-                for (let i = start; i <= end; i++) {
-                    if (imageFiles[i]) {
-                        newSelected.add(imageFiles[i].name);
-                    }
-                }
-                setSelectedFiles(newSelected);
-            } else {
-                setLastClickedIndex(index);
-            }
+        if (event.shiftKey && lastClickedIndex !== null) {
+            // Shift+click: select range
+            event.preventDefault();
+            event.stopPropagation();
+            const start = Math.min(lastClickedIndex, index);
+            const end = Math.max(lastClickedIndex, index);
+            const newSelected = new Set(selectedFiles);
             
+            for (let i = start; i <= end; i++) {
+                if (images[i]) {
+                    newSelected.add(images[i].fileName);
+                }
+            }
+            setSelectedFiles(newSelected);
+            // Keep the same lastClickedIndex for chaining ranges
+        } else {
+            // Regular click: set last clicked index and open preview
+            setLastClickedIndex(index);
             setSelectedImage(fileName);
             setShowImagePreview(true);
         }
     };
 
-    const handleCheckboxChange = (fileName, event) => {
+    const handleCheckboxChange = (fileName, index, event) => {
         event.stopPropagation();
-        const newSelected = new Set(selectedFiles);
-        if (newSelected.has(fileName)) {
-            newSelected.delete(fileName);
+        
+        if (event.shiftKey && lastClickedIndex !== null) {
+            // Shift+click: select range
+            const start = Math.min(lastClickedIndex, index);
+            const end = Math.max(lastClickedIndex, index);
+            const newSelected = new Set(selectedFiles);
+            
+            for (let i = start; i <= end; i++) {
+                if (images[i]) {
+                    newSelected.add(images[i].fileName);
+                }
+            }
+            setSelectedFiles(newSelected);
         } else {
-            newSelected.add(fileName);
+            // Regular checkbox click: toggle single item
+            const newSelected = new Set(selectedFiles);
+            if (newSelected.has(fileName)) {
+                newSelected.delete(fileName);
+            } else {
+                newSelected.add(fileName);
+            }
+            setSelectedFiles(newSelected);
+            setLastClickedIndex(index); // Set last clicked for shift+click chaining
         }
-        setSelectedFiles(newSelected);
     };
 
     const handleDragStart = (event, fileName) => {
@@ -171,11 +208,7 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
             filesToDrag = [fileName];
         }
 
-        const filesWithPath = filesToDrag.map(file => {
-            return currentPath.length > 0 ? `${currentPath.join('/')}/${file}` : file;
-        });
-
-        event.dataTransfer.setData('text/plain', JSON.stringify(filesWithPath));
+        event.dataTransfer.setData('text/plain', JSON.stringify(filesToDrag));
         event.currentTarget.classList.add('dragging');
     };
 
@@ -199,9 +232,8 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
 
         try {
             const files = JSON.parse(event.dataTransfer.getData('text/plain'));
-            const targetPath = [...currentPath, folderName].join('/');
 
-            setMoveData({ files, targetFolder: folderName, targetPath });
+            setMoveData({ files, targetFolder: folderName });
             setShowMoveDialog(true);
         } catch (error) {
             console.error('Error parsing drag data:', error);
@@ -210,12 +242,7 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
 
     const confirmMove = async () => {
         if (moveData) {
-            const success = await apiService.moveFiles(moveData.files, moveData.targetPath);
-            if (success) {
-                onRefresh();
-            } else {
-                alert('Failed to move files');
-            }
+            alert('Move functionality is now handled at the main level');
         }
         setShowMoveDialog(false);
         setMoveData(null);
@@ -227,10 +254,9 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
         setMoveData(null);
     };
 
-    if (currentPath.length === 0) return <div>Select a folder to view its contents</div>;
+    if (!currentFolder) return <div>Select a folder to view its contents</div>;
     if (loading) return <div>Loading...</div>;
     if (error) return <div>Error: {error}</div>;
-    if (!folder || !folder.children) return <div>Empty folder</div>;
 
     return (
         <div>
@@ -258,14 +284,13 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
                             color: 'white',
                             border: 'none',
                             borderRadius: '4px',
-                            cursor: uploading ? 'not-allowed' : 'pointer',
+                            cursor: 'pointer',
                             fontSize: '14px',
-                            opacity: uploading ? 0.6 : 1,
                             marginRight: '10px'
                         }}
                     >
                         <i className="fas fa-upload" style={{ marginRight: '8px' }}></i>
-                        {uploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}...` : 'Upload Files'}
+                        Upload Files
                     </label>
                     <label
                         htmlFor="folder-upload"
@@ -281,10 +306,10 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
                         }}
                     >
                         <i className="fas fa-folder-plus" style={{ marginRight: '8px' }}></i>
-                        Upload Folder
+                        {uploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}...` : 'Upload Folder'}
                     </label>
                     <span style={{ marginLeft: '10px', fontSize: '14px', color: '#6c757d' }}>
-                        Upload to: /{currentPath.join('/')}
+                        Upload to: {currentFolder?.name || 'No folder selected'}
                     </span>
                 </div>
                 
@@ -327,112 +352,65 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
                     gap: '15px',
                     padding: '10px'
                 }}>
-                    {/* Show folders first */}
-                    {folder.children
-                        .filter(item => item.type === 'folder')
-                        .map((item) => (
-                            <div
-                                key={item.name}
-                                className={`folder-item ${dragOverFolder === item.name ? 'drag-over' : ''}`}
-                                onDragOver={(e) => handleDragOver(e, item.name)}
-                                onDragLeave={handleDragLeave}
-                                onDrop={(e) => handleDrop(e, item.name)}
-                                onClick={() => {
-                                    if (currentPath.length === 0) {
-                                        onNavigate([item.name]);
-                                    }
+                    {/* Show images */}
+                    {images.slice(0, loadedImageCount).map((item, index) => (
+                        <div
+                            key={item.imageId}
+                            className={`thumbnail-item ${
+                                selectedFiles.has(item.fileName) ? 'selected' : ''
+                            } ${
+                                selectedImage === item.fileName ? 'recently-clicked' : ''
+                            }`}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, item.fileName)}
+                            onDragEnd={handleDragEnd}
+                            onClick={(e) => handleFileClick(item.fileName, index, e)}
+                            style={{
+                                border: '2px solid #e1e5e9',
+                                borderRadius: '8px',
+                                padding: '10px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                position: 'relative'
+                            }}
+                        >
+                            <input
+                                type="checkbox"
+                                className="checkbox"
+                                checked={selectedFiles.has(item.fileName)}
+                                readOnly
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCheckboxChange(item.fileName, index, e);
                                 }}
                                 style={{
-                                    border: '2px solid #e1e5e9',
-                                    borderRadius: '8px',
-                                    padding: '40px 10px',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    color: '#1a73e8',
-                                    fontWeight: '500'
+                                    position: 'absolute',
+                                    top: '5px',
+                                    left: '5px',
+                                    zIndex: 1
                                 }}
-                            >
-                                <i className="fas fa-folder" style={{ fontSize: '48px', marginBottom: '8px' }}></i>
-                                <div style={{
-                                    fontSize: '12px',
-                                    textAlign: 'center',
-                                    wordBreak: 'break-word'
-                                }}>
-                                    {item.name}
-                                </div>
+                            />
+                            <img
+                                src={item.url}
+                                alt={item.fileName}
+                                style={{
+                                    width: '100%',
+                                    height: '150px',
+                                    objectFit: 'contain',
+                                    borderRadius: '4px',
+                                    marginBottom: '8px'
+                                }}
+                            />
+                            <div style={{
+                                fontSize: '12px',
+                                textAlign: 'center',
+                                color: '#666',
+                                wordBreak: 'break-word'
+                            }}>
+                                {item.fileName}
                             </div>
-                        ))
-                    }
-                    {/* Then show images */}
-                    {folder.children
-                        .filter(item => item.type === 'file' && isImageFile(item.name))
-                        .slice(0, loadedImageCount)
-                        .map((item, index) => {
-                            const imageUrl = images.find(img => img.name === item.name)?.url || `/api/files/${currentPath.join('/')}/${item.name}`;
-                            return (
-                                <div
-                                    key={item.name}
-                                    className={`thumbnail-item ${
-                                        selectedFiles.has(item.name) ? 'selected' : ''
-                                    } ${
-                                        selectedImage === item.name ? 'recently-clicked' : ''
-                                    }`}
-                                    draggable
-                                    onDragStart={(e) => handleDragStart(e, item.name)}
-                                    onDragEnd={handleDragEnd}
-                                    onClick={(e) => handleFileClick(item.name, index, e)}
-                                    style={{
-                                        border: '2px solid #e1e5e9',
-                                        borderRadius: '8px',
-                                        padding: '10px',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s',
-                                        position: 'relative'
-                                    }}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        className="checkbox"
-                                        checked={selectedFiles.has(item.name)}
-                                        readOnly
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleCheckboxChange(item.name, e);
-                                        }}
-                                        style={{
-                                            position: 'absolute',
-                                            top: '5px',
-                                            left: '5px',
-                                            zIndex: 1
-                                        }}
-                                    />
-                                    <img
-                                        src={imageUrl}
-                                        alt={item.name}
-                                        style={{
-                                            width: '100%',
-                                            height: '150px',
-                                            objectFit: 'contain',
-                                            borderRadius: '4px',
-                                            marginBottom: '8px'
-                                        }}
-                                    />
-                                    <div style={{
-                                        fontSize: '12px',
-                                        textAlign: 'center',
-                                        color: '#666',
-                                        wordBreak: 'break-word'
-                                    }}>
-                                        {item.name}
-                                    </div>
-                                </div>
-                            );
-                        })
-                    }
+                        </div>
+                    ))}
                     {hasMoreImages && (
                         <div
                             onClick={loadMoreImages}
@@ -465,54 +443,42 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
                     )}
                 </div>
             ) : (
-                folder.children.map(item => (
+                images.map((item, index) => (
                     <div
-                        key={item.name}
-                        className={`${item.type === 'folder' ? 'folder-item' : 'file-item'} ${
-                            selectedFiles.has(item.name) ? 'selected' : ''
-                        } ${dragOverFolder === item.name ? 'drag-over' : ''} ${
-                            selectedImage === item.name ? 'recently-clicked' : ''
+                        key={item.imageId}
+                        className={`file-item ${
+                            selectedFiles.has(item.fileName) ? 'selected' : ''
+                        } ${
+                            selectedImage === item.fileName ? 'recently-clicked' : ''
                         }`}
-                        draggable={item.type === 'file'}
-                        onDragStart={(e) => handleDragStart(e, item.name)}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, item.fileName)}
                         onDragEnd={handleDragEnd}
-                        onDragOver={item.type === 'folder' ? (e) => handleDragOver(e, item.name) : undefined}
-                        onDragLeave={item.type === 'folder' ? handleDragLeave : undefined}
-                        onDrop={item.type === 'folder' ? (e) => handleDrop(e, item.name) : undefined}
                         onClick={(e) => {
                             if (e.target.type === 'checkbox') return;
-                            if (item.type === 'folder') {
-                                // Only allow navigation to root-level folders
-                                if (currentPath.length === 0) {
-                                    onNavigate([item.name]);
-                                }
-                            } else {
-                                handleFileClick(item.name, folder.children.filter(child => child.type === 'file' && isImageFile(child.name)).findIndex(child => child.name === item.name), e);
-                            }
+                            handleFileClick(item.fileName, index, e);
                         }}
                     >
-                        {item.type === 'file' && (
-                            <input
-                                type="checkbox"
-                                className="checkbox"
-                                checked={selectedFiles.has(item.name)}
-                                readOnly
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleCheckboxChange(item.name, e);
-                                }}
-                            />
-                        )}
-                        <i className={`fas ${item.type === 'folder' ? 'fa-folder' : isImageFile(item.name) ? 'fa-image' : 'fa-file'} icon`}></i>
-                        {item.name}
+                        <input
+                            type="checkbox"
+                            className="checkbox"
+                            checked={selectedFiles.has(item.fileName)}
+                            readOnly
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleCheckboxChange(item.fileName, index, e);
+                            }}
+                        />
+                        <i className="fas fa-image icon"></i>
+                        {item.fileName}
                     </div>
                 ))
-            )}}
+            )}
 
             <ImagePreview
                 isOpen={showImagePreview}
                 imageName={selectedImage}
-                imagePath={selectedImage ? (images.find(img => img.name === selectedImage)?.url || `/api/files/${currentPath.join('/')}/${selectedImage}`) : ''}
+                imagePath={selectedImage ? (images.find(img => img.fileName === selectedImage)?.url || '') : ''}
                 onClose={() => setShowImagePreview(false)}
             />
         </div>
@@ -520,11 +486,37 @@ function ContentView({ currentPath, onNavigate, onRefresh }) {
 }
 
 // Tree View Component
-function TreeView({ onNavigate, onDrop, refreshKey }) {
+function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeDataChange }) {
     const [treeData, setTreeData] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [dragOverPath, setDragOverPath] = useState(null);
     const treeRef = useRef(null);
+
+    // NewImplementation - Add new folder to existing tree data
+    const addFolderToTree = (newFolder) => {
+        if (treeData && treeData.children) {
+            const newChild = {
+                name: newFolder.folderName,
+                type: 'folder',
+                folderId: newFolder.folderId,
+                children: []
+            };
+            
+            const newTreeData = {
+                ...treeData,
+                children: [...treeData.children, newChild]
+            };
+            setTreeData(newTreeData);
+            if (onTreeDataChange) onTreeDataChange(newTreeData);
+        }
+    };
+
+    // NewImplementation - Expose addFolderToTree to parent
+    useEffect(() => {
+        if (onFolderCreated) {
+            onFolderCreated.current = addFolderToTree;
+        }
+    }, [onFolderCreated, treeData]);
 
     const handleDragOver = (event, path) => {
         event.preventDefault();
@@ -552,6 +544,7 @@ function TreeView({ onNavigate, onDrop, refreshKey }) {
             try {
                 const rootData = await apiService.loadFolder('');
                 setTreeData(rootData);
+                if (onTreeDataChange) onTreeDataChange(rootData);
             } catch (error) {
                 console.error('Failed to load tree:', error);
             }
@@ -586,7 +579,10 @@ function TreeView({ onNavigate, onDrop, refreshKey }) {
                     className={`folder-item ${isRoot ? 'root-folder' : ''} ${isDragOver ? 'drag-over' : ''} ${
                         !isRoot && matchesSearch(node.name) && searchTerm ? 'search-highlight' : ''
                     }`}
-                    onClick={isRoot ? undefined : () => onNavigate(path)}
+                    onClick={isRoot ? undefined : () => onFolderSelect({
+                        folderId: node.folderId,
+                        name: node.name
+                    })}
                     onDragOver={!isRoot ? (e) => handleDragOver(e, path) : undefined}
                     onDragLeave={!isRoot ? handleDragLeave : undefined}
                     onDrop={!isRoot ? (e) => handleDrop(e, path) : undefined}
@@ -634,6 +630,21 @@ function FileManager({ currentPath, onNavigate }) {
     const [showMoveDialog, setShowMoveDialog] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(300);
     const [isResizing, setIsResizing] = useState(false);
+    const [selectedFolder, setSelectedFolder] = useState(null);
+    const [treeData, setTreeData] = useState(null);
+    const [currentImages, setCurrentImages] = useState([]);
+    
+    // NewImplementation - Ref to add folder without API call
+    const folderCreatedRef = useRef(null);
+
+    // Helper function to find folder ID by path
+    const findFolderIdByPath = (targetPath) => {
+        if (!treeData || !treeData.children) return null;
+        
+        const folderName = targetPath.split('/').pop();
+        const folder = treeData.children.find(child => child.name === folderName);
+        return folder ? folder.folderId : null;
+    };
 
     const handleMouseDown = (e) => {
         setIsResizing(true);
@@ -675,11 +686,26 @@ function FileManager({ currentPath, onNavigate }) {
 
     const confirmMove = async () => {
         if (moveData) {
-            const success = await apiService.moveFiles(moveData.files, moveData.targetPath);
-            if (success) {
-                handleRefresh();
-            } else {
-                alert('Failed to move files');
+            try {
+                // Get image IDs from selected files
+                const imageIds = currentImages
+                    .filter(img => moveData.files.includes(img.fileName))
+                    .map(img => img.imageId);
+                
+                if (imageIds.length > 0) {
+                    // Find target folder ID from tree data
+                    const targetFolderId = findFolderIdByPath(moveData.targetPath);
+                    if (targetFolderId) {
+                        await apiService.moveImages(imageIds, targetFolderId);
+                        handleRefresh();
+                    } else {
+                        alert('Target folder not found');
+                    }
+                } else {
+                    alert('No images selected for move');
+                }
+            } catch (error) {
+                alert('Failed to move files: ' + error.message);
             }
         }
         setShowMoveDialog(false);
@@ -710,8 +736,13 @@ function FileManager({ currentPath, onNavigate }) {
                             const folderName = prompt('Enter folder name:');
                             if (folderName && folderName.trim()) {
                                 try {
-                                    await apiService.createFolder(folderName.trim());
-                                    handleRefresh();
+                                    // NewImplementation - Create folder and get response
+                                    const result = await apiService.createFolder(folderName.trim());
+                                    
+                                    // NewImplementation - Add to tree without API call
+                                    if (result.folder && folderCreatedRef.current) {
+                                        folderCreatedRef.current(result.folder);
+                                    }
                                 } catch (error) {
                                     alert('Failed to create folder: ' + error.message);
                                 }
@@ -722,7 +753,14 @@ function FileManager({ currentPath, onNavigate }) {
                     </button>
                 </div>
                 <div className="tree-container">
-                    <TreeView key={refreshKey} onNavigate={onNavigate} onDrop={handleTreeDrop} refreshKey={refreshKey} />
+                    <TreeView 
+                        key={refreshKey} 
+                        onFolderSelect={setSelectedFolder}
+                        onDrop={handleTreeDrop} 
+                        refreshKey={refreshKey}
+                        onFolderCreated={folderCreatedRef}
+                        onTreeDataChange={setTreeData}
+                    />
                 </div>
             </div>
             <div 
@@ -739,15 +777,15 @@ function FileManager({ currentPath, onNavigate }) {
             <div className="main" style={{ flex: 1 }}>
                 <div className="toolbar">
                     <div className="breadcrumb">
-                        /{currentPath.join('/')}
+                        {selectedFolder ? selectedFolder.name : 'Select a folder'}
                     </div>
                 </div>
                 <div className="content">
                     <ContentView
                         key={refreshKey}
-                        currentPath={currentPath}
-                        onNavigate={onNavigate}
+                        currentFolder={selectedFolder}
                         onRefresh={handleRefresh}
+                        onImagesChange={setCurrentImages}
                     />
                 </div>
             </div>

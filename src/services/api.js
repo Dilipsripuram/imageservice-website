@@ -12,43 +12,33 @@ class ApiService {
         const env = window.location.hostname === 'localhost' ? 'local' : 'prod';
         
         const config = {
-            local: 'https://l0mfi5f7ue.execute-api.us-east-1.amazonaws.com/prod',
-            prod: 'https://l0mfi5f7ue.execute-api.us-east-1.amazonaws.com/prod'
+            local: 'https://yhmbosh4rf.execute-api.us-east-1.amazonaws.com/prod',
+            prod: 'https://yhmbosh4rf.execute-api.us-east-1.amazonaws.com/prod'
         };
         
         return config[env];
     }
 
+    // NewImplementation - Load all folders at once
     async loadFolder(path = '') {
         try {
-            const url = path 
-                ? `${this.baseUrl}/files?path=${encodeURIComponent(path)}`
-                : `${this.baseUrl}/files`;
-            
-            const response = await fetch(url);
+            const response = await fetch(`${this.baseUrl}/folders`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             
             const data = await response.json();
             
-            // Convert AWS API format to UI expected format
-            const children = [
-                ...data.folders.map(folder => ({
-                    name: folder.name,
-                    type: 'folder',
-                    children: []
-                })),
-                ...data.files.map(file => ({
-                    name: file.name,
-                    type: 'file',
-                    size: file.size || 0,
-                    modified: file.lastModified || new Date()
-                }))
-            ];
+            // NewImplementation - Convert to UI expected format
+            const children = data.folders.map(folder => ({
+                name: folder.folderName,
+                type: 'folder',
+                folderId: folder.folderId,
+                children: []
+            }));
             
             return {
-                name: path || 'root',
+                name: 'root',
                 type: 'folder',
                 children
             };
@@ -58,72 +48,166 @@ class ApiService {
         }
     }
 
-    async moveFiles(files, targetPath) {
+    // NewImplementation - Move images to different folder
+    async moveImages(imageIds, targetFolderId) {
         try {
-            const response = await fetch(`${this.baseUrl}/create-folder`, {
-                method: 'POST',
+            const response = await fetch(`${this.baseUrl}/images`, {
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    action: 'move_files',
-                    files, 
-                    targetPath 
+                    imageIds,
+                    targetFolderId 
                 })
             });
             
             if (!response.ok) {
                 throw new Error(`Move failed: ${response.statusText}`);
             }
-            return true;
+            
+            return await response.json();
         } catch (error) {
-            console.error('Move files failed:', error);
-            return false;
+            console.error('Move images failed:', error);
+            throw error;
         }
     }
 
-    async uploadFiles(targetFolder, files) {
+    // NewImplementation - Move folder to different parent
+    async moveFolder(folderId, newParentId) {
         try {
-            const fileData = await Promise.all(
-                files.map(file => new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const base64 = reader.result.split(',')[1];
-                        resolve({
-                            name: file.name,
-                            content: base64,
-                            type: file.type
-                        });
-                    };
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                }))
-            );
-
-            const response = await fetch(`${this.baseUrl}/upload`, {
-                method: 'POST',
+            const response = await fetch(`${this.baseUrl}/folders`, {
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    targetFolder,
-                    files: fileData
+                body: JSON.stringify({ 
+                    folderId,
+                    newParentId 
                 })
             });
-
+            
             if (!response.ok) {
-                throw new Error(`Upload failed: ${response.statusText}`);
+                throw new Error(`Move folder failed: ${response.statusText}`);
             }
+            
             return await response.json();
+        } catch (error) {
+            console.error('Move folder failed:', error);
+            throw error;
+        }
+    }
+
+    // NewImplementation - Upload files with batching
+    async uploadFiles(folderId, files, onProgress = null) {
+        try {
+            const MAX_BATCH_SIZE = 5 * 1024 * 1024; // 5MB to stay well under 10MB limit
+            
+            // Convert files to base64 and calculate sizes
+            const fileDataPromises = files.map(file => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64 = reader.result.split(',')[1];
+                    const sizeInBytes = Math.ceil(base64.length * 0.75); // Approximate original size
+                    resolve({
+                        name: file.name,
+                        content: base64,
+                        type: file.type,
+                        size: sizeInBytes
+                    });
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            }));
+            
+            const fileData = await Promise.all(fileDataPromises);
+            
+            // Create batches based on size
+            const batches = [];
+            let currentBatch = [];
+            let currentBatchSize = 0;
+            
+            for (const file of fileData) {
+                // If adding this file would exceed the limit, start a new batch
+                if (currentBatchSize + file.size > MAX_BATCH_SIZE && currentBatch.length > 0) {
+                    batches.push(currentBatch);
+                    currentBatch = [file];
+                    currentBatchSize = file.size;
+                } else {
+                    currentBatch.push(file);
+                    currentBatchSize += file.size;
+                }
+            }
+            
+            // Add the last batch if it has files
+            if (currentBatch.length > 0) {
+                batches.push(currentBatch);
+            }
+            
+            // Upload batches sequentially
+            let totalUploaded = 0;
+            const allResults = {
+                uploadedImages: [],
+                failedUploads: []
+            };
+            
+            for (let i = 0; i < batches.length; i++) {
+                const batch = batches[i];
+                
+                try {
+                    const response = await fetch(`${this.baseUrl}/images`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            folderId,
+                            files: batch.map(f => ({ name: f.name, content: f.content, type: f.type }))
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`Batch ${i + 1} failed: ${response.statusText}`);
+                    }
+                    
+                    const result = await response.json();
+                    
+                    // Merge results
+                    if (result.uploadedImages) {
+                        allResults.uploadedImages.push(...result.uploadedImages);
+                    }
+                    if (result.failedUploads) {
+                        allResults.failedUploads.push(...result.failedUploads);
+                    }
+                    
+                    totalUploaded += batch.length;
+                    
+                    // Call progress callback if provided
+                    if (onProgress) {
+                        onProgress(totalUploaded, files.length);
+                    }
+                    
+                } catch (error) {
+                    console.error(`Batch ${i + 1} upload failed:`, error);
+                    // Mark all files in this batch as failed
+                    batch.forEach(file => {
+                        allResults.failedUploads.push({
+                            fileName: file.name,
+                            error: error.message
+                        });
+                    });
+                }
+            }
+            
+            return allResults;
+            
         } catch (error) {
             console.error('Upload failed:', error);
             throw error;
         }
     }
 
+    // NewImplementation - Create folder and return new folder data
     async createFolder(folderName) {
         try {
-            const response = await fetch(`${this.baseUrl}/create-folder`, {
+            const response = await fetch(`${this.baseUrl}/folders`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    action: 'create_folder',
                     folderName 
                 })
             });
@@ -138,9 +222,14 @@ class ApiService {
         }
     }
 
-    async loadImages(folderPath = '', limit = 20, offset = 0) {
+    // NewImplementation - Load images with pagination
+    async loadImages(folderId, limit = 20, lastKey = null) {
         try {
-            const url = `${this.baseUrl}/images?folder=${encodeURIComponent(folderPath)}&limit=${limit}&offset=${offset}`;
+            let url = `${this.baseUrl}/images?folderId=${encodeURIComponent(folderId)}&limit=${limit}`;
+            if (lastKey) {
+                url += `&lastKey=${encodeURIComponent(lastKey)}`;
+            }
+            
             const response = await fetch(url);
             
             if (!response.ok) {
