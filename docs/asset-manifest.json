@@ -1,13 +1,13 @@
 {
   "files": {
     "main.css": "/imageservice-website/static/css/main.302a6e40.css",
-    "main.js": "/imageservice-website/static/js/main.bc72a4c3.js",
+    "main.js": "/imageservice-website/static/js/main.0af0f46c.js",
     "index.html": "/imageservice-website/index.html",
     "main.302a6e40.css.map": "/imageservice-website/static/css/main.302a6e40.css.map",
-    "main.bc72a4c3.js.map": "/imageservice-website/static/js/main.bc72a4c3.js.map"
+    "main.0af0f46c.js.map": "/imageservice-website/static/js/main.0af0f46c.js.map"
   },
   "entrypoints": [
     "static/css/main.302a6e40.css",
-    "static/js/main.bc72a4c3.js"
+    "static/js/main.0af0f46c.js"
   ]
 }

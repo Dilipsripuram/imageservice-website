@@ -345,6 +345,53 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
                 </div>
             </div>
             
+            {/* Select All/Deselect All Row */}
+            {images.length > 0 && (
+                <div style={{
+                    padding: '10px',
+                    background: '#f1f3f4',
+                    borderRadius: '4px',
+                    marginBottom: '15px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}>
+                    <div
+                        onClick={() => {
+                            if (selectedFiles.size === images.length) {
+                                setSelectedFiles(new Set());
+                            } else {
+                                setSelectedFiles(new Set(images.map(img => img.fileName)));
+                            }
+                        }}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            padding: '8px 12px',
+                            borderRadius: '4px',
+                            transition: 'background-color 0.2s'
+                        }}
+                        onMouseEnter={(e) => e.target.style.backgroundColor = '#e9ecef'}
+                        onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={selectedFiles.size === images.length && images.length > 0}
+                            readOnly
+                            style={{
+                                width: '18px',
+                                height: '18px',
+                                marginRight: '10px',
+                                cursor: 'pointer'
+                            }}
+                        />
+                        <span style={{ fontSize: '14px', fontWeight: '500' }}>
+                            {selectedFiles.size === images.length && images.length > 0 ? 'Deselect All' : 'Select All'} ({images.length} images)
+                        </span>
+                    </div>
+                </div>
+            )}
+            
             {viewMode === 'thumbnail' ? (
                 <div style={{
                     display: 'grid',
@@ -385,9 +432,12 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
                                 }}
                                 style={{
                                     position: 'absolute',
-                                    top: '5px',
-                                    left: '5px',
-                                    zIndex: 1
+                                    top: '8px',
+                                    left: '8px',
+                                    width: '20px',
+                                    height: '20px',
+                                    zIndex: 1,
+                                    cursor: 'pointer'
                                 }}
                             />
                             <img
@@ -467,6 +517,12 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
                             onClick={(e) => {
                                 e.stopPropagation();
                                 handleCheckboxChange(item.fileName, index, e);
+                            }}
+                            style={{
+                                width: '18px',
+                                height: '18px',
+                                marginRight: '12px',
+                                cursor: 'pointer'
                             }}
                         />
                         <i className="fas fa-image icon"></i>
