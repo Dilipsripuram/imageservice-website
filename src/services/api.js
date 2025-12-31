@@ -19,10 +19,21 @@ class ApiService {
         return config[env];
     }
 
+    // Helper method to get auth headers
+    getAuthHeaders() {
+        const token = localStorage.getItem('authToken');
+        return {
+            'Content-Type': 'application/json',
+            ...(token && { 'Authorization': `Bearer ${token}` })
+        };
+    }
+
     // NewImplementation - Load all folders at once
     async loadFolder(path = '') {
         try {
-            const response = await fetch(`${this.baseUrl}/folders`);
+            const response = await fetch(`${this.baseUrl}/folders`, {
+                headers: this.getAuthHeaders()
+            });
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
@@ -53,7 +64,7 @@ class ApiService {
         try {
             const response = await fetch(`${this.baseUrl}/images`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getAuthHeaders(),
                 body: JSON.stringify({ 
                     imageIds,
                     targetFolderId 
@@ -76,7 +87,7 @@ class ApiService {
         try {
             const response = await fetch(`${this.baseUrl}/folders`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getAuthHeaders(),
                 body: JSON.stringify({ 
                     folderId,
                     newParentId 
@@ -153,7 +164,7 @@ class ApiService {
                 try {
                     const response = await fetch(`${this.baseUrl}/images`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: this.getAuthHeaders(),
                         body: JSON.stringify({
                             folderId,
                             files: batch.map(f => ({ name: f.name, content: f.content, type: f.type }))
@@ -206,7 +217,7 @@ class ApiService {
         try {
             const response = await fetch(`${this.baseUrl}/folders`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this.getAuthHeaders(),
                 body: JSON.stringify({ 
                     folderName 
                 })
@@ -230,7 +241,9 @@ class ApiService {
                 url += `&lastKey=${encodeURIComponent(lastKey)}`;
             }
             
-            const response = await fetch(url);
+            const response = await fetch(url, {
+                headers: this.getAuthHeaders()
+            });
             
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -241,6 +254,37 @@ class ApiService {
             console.error('Failed to load images:', error);
             throw error;
         }
+    }
+
+    // NewImplementation - Login function
+    async login(username, password) {
+        try {
+            const response = await fetch(`${this.baseUrl}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Login failed');
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('Login failed:', error);
+            throw error;
+        }
+    }
+
+    // NewImplementation - Check if user is authenticated
+    isAuthenticated() {
+        return !!localStorage.getItem('authToken');
+    }
+
+    // NewImplementation - Logout
+    logout() {
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('username');
     }
 }
 
