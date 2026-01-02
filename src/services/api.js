@@ -19,6 +19,22 @@ class ApiService {
         return config[env];
     }
 
+    // Helper method to handle API responses and check for auth errors
+    async handleResponse(response) {
+        if (response.status === 401) {
+            // Token expired or invalid - clear auth and redirect to login
+            this.logout();
+            window.location.reload(); // Force app to show login screen
+            throw new Error('Authentication required');
+        }
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        return response.json();
+    }
+
     // Helper method to get auth headers
     getAuthHeaders() {
         const token = localStorage.getItem('authToken');
@@ -34,11 +50,8 @@ class ApiService {
             const response = await fetch(`${this.baseUrl}/folders`, {
                 headers: this.getAuthHeaders()
             });
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
             
-            const data = await response.json();
+            const data = await this.handleResponse(response);
             
             // NewImplementation - Convert to UI expected format
             const children = data.folders.map(folder => ({
@@ -245,11 +258,7 @@ class ApiService {
                 headers: this.getAuthHeaders()
             });
             
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            return await response.json();
+            return await this.handleResponse(response);
         } catch (error) {
             console.error('Failed to load images:', error);
             throw error;
