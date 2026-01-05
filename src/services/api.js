@@ -58,6 +58,9 @@ class ApiService {
                 name: folder.folderName,
                 type: 'folder',
                 folderId: folder.folderId,
+                createdBy: folder.createdBy,
+                createdAt: folder.createdAt,
+                notes: folder.notes || '',
                 children: []
             }));
             
@@ -294,6 +297,73 @@ class ApiService {
     logout() {
         localStorage.removeItem('authToken');
         localStorage.removeItem('username');
+    }
+
+    // NewImplementation - Rename folder
+    async renameFolder(folderId, newFolderName) {
+        try {
+            const response = await fetch(`${this.baseUrl}/folders`, {
+                method: 'PUT',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({ 
+                    folderId,
+                    newFolderName 
+                })
+            });
+            
+            return await this.handleResponse(response);
+        } catch (error) {
+            console.error('Rename folder failed:', error);
+            throw error;
+        }
+    }
+
+    // NewImplementation - Replace image
+    async replaceImage(imageId, newFile) {
+        try {
+            // Convert file to base64
+            const base64Content = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(newFile);
+            });
+            
+            const response = await fetch(`${this.baseUrl}/images`, {
+                method: 'PUT',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({
+                    imageId,
+                    newImageContent: base64Content,
+                    newFileName: newFile.name,
+                    newContentType: newFile.type
+                })
+            });
+            
+            return await this.handleResponse(response);
+        } catch (error) {
+            console.error('Replace image failed:', error);
+            throw error;
+        }
+    }
+
+    // Update folder notes
+    async updateFolderNotes(folderId, notes) {
+        try {
+            const response = await fetch(`${this.baseUrl}/folders`, {
+                method: 'PATCH',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({ 
+                    folderId,
+                    notes 
+                })
+            });
+            
+            return await this.handleResponse(response);
+        } catch (error) {
+            console.error('Update folder notes failed:', error);
+            throw error;
+        }
     }
 }
 

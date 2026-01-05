@@ -34,6 +34,7 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
     const [selectedImage, setSelectedImage] = useState(null);
+    const [selectedImageIndex, setSelectedImageIndex] = useState(0);
     const [showImagePreview, setShowImagePreview] = useState(false);
     const [viewMode, setViewMode] = useState('list');
     const [imagesPerPage, setImagesPerPage] = useState(20);
@@ -87,6 +88,7 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
     useEffect(() => {
         setSelectedFiles(new Set());
         setSelectedImage(null);
+        setSelectedImageIndex(0);
         
         if (currentFolder) {
             // Check cache first
@@ -168,6 +170,7 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
             // Regular click: set last clicked index and open preview
             setLastClickedIndex(index);
             setSelectedImage(fileName);
+            setSelectedImageIndex(index);
             setShowImagePreview(true);
         }
     };
@@ -535,7 +538,23 @@ function ContentView({ currentFolder, onRefresh, onImagesChange }) {
                 isOpen={showImagePreview}
                 imageName={selectedImage}
                 imagePath={selectedImage ? (images.find(img => img.fileName === selectedImage)?.url || '') : ''}
+                imageData={selectedImage ? images.find(img => img.fileName === selectedImage) : null}
+                images={images}
+                currentIndex={selectedImageIndex}
                 onClose={() => setShowImagePreview(false)}
+                onImageChange={(newImageName, newIndex) => {
+                    setSelectedImage(newImageName);
+                    setSelectedImageIndex(newIndex);
+                }}
+                onImageReplaced={() => {
+                    // Clear cache and reload images
+                    setImageCache(prev => {
+                        const newCache = new Map(prev);
+                        newCache.delete(currentFolder.folderId);
+                        return newCache;
+                    });
+                    loadImages();
+                }}
             />
         </div>
     );
@@ -546,6 +565,11 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
     const [treeData, setTreeData] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [dragOverPath, setDragOverPath] = useState(null);
+    const [contextMenu, setContextMenu] = useState(null);
+    const [renameDialog, setRenameDialog] = useState(null);
+    const [newFolderName, setNewFolderName] = useState('');
+    const [filterRecent, setFilterRecent] = useState(false);
+    const [filterUser, setFilterUser] = useState(false);
     const treeRef = useRef(null);
 
     // NewImplementation - Add new folder to existing tree data
@@ -555,6 +579,9 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
                 name: newFolder.folderName,
                 type: 'folder',
                 folderId: newFolder.folderId,
+                createdBy: newFolder.createdBy,
+                createdAt: newFolder.createdAt,
+                notes: newFolder.notes || '',
                 children: []
             };
             
@@ -595,6 +622,63 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
         }
     };
 
+    const handleRightClick = (event, folder) => {
+        event.preventDefault();
+        setContextMenu({
+            x: event.clientX,
+            y: event.clientY,
+            folder: folder
+        });
+    };
+
+    const handleRename = (folder) => {
+        setContextMenu(null);
+        setRenameDialog(folder);
+        setNewFolderName(folder.name);
+    };
+
+    const confirmRename = async () => {
+        if (!renameDialog || !newFolderName.trim()) return;
+        
+        try {
+            await apiService.renameFolder(renameDialog.folderId, newFolderName.trim());
+            
+            // Update tree data locally
+            if (treeData && treeData.children) {
+                const updatedChildren = treeData.children.map(child => 
+                    child.folderId === renameDialog.folderId 
+                        ? { ...child, name: newFolderName.trim() }
+                        : child
+                );
+                const newTreeData = { ...treeData, children: updatedChildren };
+                setTreeData(newTreeData);
+                if (onTreeDataChange) onTreeDataChange(newTreeData);
+            }
+            
+            setRenameDialog(null);
+            setNewFolderName('');
+        } catch (error) {
+            alert('Failed to rename folder: ' + error.message);
+        }
+    };
+
+    const cancelRename = () => {
+        setRenameDialog(null);
+        setNewFolderName('');
+    };
+
+    // Close context menu on click outside
+    useEffect(() => {
+        const handleClickOutside = () => {
+            setContextMenu(null);
+        };
+        
+        if (contextMenu) {
+            document.addEventListener('click', handleClickOutside);
+            return () => document.removeEventListener('click', handleClickOutside);
+        }
+    }, [contextMenu]);
+
     useEffect(() => {
         const loadTree = async () => {
             try {
@@ -610,6 +694,39 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
 
     const matchesSearch = (name) => {
         return searchTerm === '' || name.toLowerCase().includes(searchTerm.toLowerCase());
+    };
+
+    const getFilteredFolders = () => {
+        if (!treeData || !treeData.children) return [];
+        
+        let folders = [...treeData.children];
+        const currentUser = localStorage.getItem('username');
+        
+        console.log('Current user:', currentUser);
+        console.log('All folders:', folders.map(f => ({ name: f.name, createdBy: f.createdBy })));
+        
+        // Filter by user if enabled
+        if (filterUser && currentUser) {
+            folders = folders.filter(folder => {
+                console.log(`Checking folder ${folder.name}: createdBy=${folder.createdBy}, currentUser=${currentUser}`);
+                // Only show folders created by current user (strict filtering)
+                return folder.createdBy === currentUser;
+            });
+        }
+        
+        // Sort by recent if enabled
+        if (filterRecent) {
+            folders.sort((a, b) => {
+                const dateA = new Date(a.createdAt || '1970-01-01');
+                const dateB = new Date(b.createdAt || '1970-01-01');
+                return dateB - dateA; // Most recent first
+            });
+        }
+        
+        // Apply search filter
+        const filtered = folders.filter(folder => matchesSearch(folder.name));
+        console.log('Filtered folders:', filtered.map(f => f.name));
+        return filtered;
     };
 
     const renderTreeNode = (node, path = []) => {
@@ -639,6 +756,7 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
                         folderId: node.folderId,
                         name: node.name
                     })}
+                    onContextMenu={!isRoot ? (e) => handleRightClick(e, node) : undefined}
                     onDragOver={!isRoot ? (e) => handleDragOver(e, path) : undefined}
                     onDragLeave={!isRoot ? handleDragLeave : undefined}
                     onDrop={!isRoot ? (e) => handleDrop(e, path) : undefined}
@@ -649,8 +767,7 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
                 </div>
                 {node.children && isRoot && (
                     <div className="tree-item">
-                        {node.children
-                            .filter(child => child.type === 'folder')
+                        {getFilteredFolders()
                             .map(child =>
                                 renderTreeNode(child, [...path, child.name])
                             )
@@ -665,6 +782,47 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
 
     return (
         <div>
+            {/* Filter Options */}
+            <div style={{
+                padding: '15px',
+                borderBottom: '1px solid #e1e5e9',
+                background: '#f8f9fa'
+            }}>
+                <div style={{ marginBottom: '10px', fontSize: '14px', fontWeight: '500', color: '#495057' }}>Filters</div>
+                <div style={{ display: 'flex', gap: '15px' }}>
+                    <label style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        color: '#6c757d'
+                    }}>
+                        <input
+                            type="checkbox"
+                            checked={filterRecent}
+                            onChange={(e) => setFilterRecent(e.target.checked)}
+                            style={{ marginRight: '6px' }}
+                        />
+                        Recent
+                    </label>
+                    <label style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        color: '#6c757d'
+                    }}>
+                        <input
+                            type="checkbox"
+                            checked={filterUser}
+                            onChange={(e) => setFilterUser(e.target.checked)}
+                            style={{ marginRight: '6px' }}
+                        />
+                        My Folders
+                    </label>
+                </div>
+            </div>
+            
             <input
                 type="text"
                 className="search-box"
@@ -675,6 +833,107 @@ function TreeView({ onFolderSelect, onDrop, refreshKey, onFolderCreated, onTreeD
             <div ref={treeRef}>
                 {renderTreeNode(treeData)}
             </div>
+            
+            {/* Context Menu */}
+            {contextMenu && (
+                <div style={{
+                    position: 'fixed',
+                    top: contextMenu.y,
+                    left: contextMenu.x,
+                    background: 'white',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    zIndex: 1000,
+                    minWidth: '120px'
+                }}>
+                    <div
+                        onClick={() => handleRename(contextMenu.folder)}
+                        style={{
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            borderBottom: '1px solid #eee'
+                        }}
+                        onMouseEnter={(e) => e.target.style.backgroundColor = '#f5f5f5'}
+                        onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                    >
+                        Rename Folder
+                    </div>
+                </div>
+            )}
+            
+            {/* Rename Dialog */}
+            {renameDialog && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    zIndex: 2000
+                }}>
+                    <div style={{
+                        background: 'white',
+                        padding: '20px',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                        minWidth: '300px'
+                    }}>
+                        <h3 style={{ margin: '0 0 15px 0', fontSize: '16px' }}>Rename Folder</h3>
+                        <input
+                            type="text"
+                            value={newFolderName}
+                            onChange={(e) => setNewFolderName(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && confirmRename()}
+                            style={{
+                                width: '100%',
+                                padding: '8px',
+                                border: '1px solid #ddd',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                                marginBottom: '15px'
+                            }}
+                            autoFocus
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                            <button
+                                onClick={cancelRename}
+                                style={{
+                                    padding: '6px 12px',
+                                    background: '#6c757d',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '12px'
+                                }}
+                            >
+                                ✕
+                            </button>
+                            <button
+                                onClick={confirmRename}
+                                disabled={!newFolderName.trim()}
+                                style={{
+                                    padding: '6px 12px',
+                                    background: newFolderName.trim() ? '#28a745' : '#6c757d',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: newFolderName.trim() ? 'pointer' : 'not-allowed',
+                                    fontSize: '12px'
+                                }}
+                            >
+                                ✓
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -689,6 +948,9 @@ function FileManager({ currentPath, onNavigate }) {
     const [selectedFolder, setSelectedFolder] = useState(null);
     const [treeData, setTreeData] = useState(null);
     const [currentImages, setCurrentImages] = useState([]);
+    const [showNotesDialog, setShowNotesDialog] = useState(false);
+    const [folderNotes, setFolderNotes] = useState('');
+    const [notesLoading, setNotesLoading] = useState(false);
     
     // NewImplementation - Ref to add folder without API call
     const folderCreatedRef = useRef(null);
@@ -738,6 +1000,53 @@ function FileManager({ currentPath, onNavigate }) {
         const folderName = targetPath.split('/').pop() || 'root';
         setMoveData({ files, targetFolder: folderName, targetPath });
         setShowMoveDialog(true);
+    };
+
+    const handleFolderSelect = (folder) => {
+        setSelectedFolder(folder);
+        setFolderNotes(folder.notes || '');
+    };
+
+    const handleNotesOpen = () => {
+        if (selectedFolder) {
+            setFolderNotes(selectedFolder.notes || '');
+            setShowNotesDialog(true);
+        }
+    };
+
+    const handleNotesSave = async () => {
+        if (!selectedFolder) return;
+        
+        setNotesLoading(true);
+        try {
+            await apiService.updateFolderNotes(selectedFolder.folderId, folderNotes);
+            
+            // Update local folder data
+            const updatedFolder = { ...selectedFolder, notes: folderNotes };
+            setSelectedFolder(updatedFolder);
+            
+            // Update tree data
+            if (treeData && treeData.children) {
+                const updatedChildren = treeData.children.map(child => 
+                    child.folderId === selectedFolder.folderId 
+                        ? { ...child, notes: folderNotes }
+                        : child
+                );
+                const newTreeData = { ...treeData, children: updatedChildren };
+                setTreeData(newTreeData);
+            }
+            
+            setShowNotesDialog(false);
+        } catch (error) {
+            alert('Failed to save notes: ' + error.message);
+        } finally {
+            setNotesLoading(false);
+        }
+    };
+
+    const handleNotesCancel = () => {
+        setFolderNotes(selectedFolder?.notes || '');
+        setShowNotesDialog(false);
     };
 
     const confirmMove = async () => {
@@ -811,7 +1120,7 @@ function FileManager({ currentPath, onNavigate }) {
                 <div className="tree-container">
                     <TreeView 
                         key={refreshKey} 
-                        onFolderSelect={setSelectedFolder}
+                        onFolderSelect={handleFolderSelect}
                         onDrop={handleTreeDrop} 
                         refreshKey={refreshKey}
                         onFolderCreated={folderCreatedRef}
@@ -835,6 +1144,24 @@ function FileManager({ currentPath, onNavigate }) {
                     <div className="breadcrumb">
                         {selectedFolder ? selectedFolder.name : 'Select a folder'}
                     </div>
+                    {selectedFolder && (
+                        <button
+                            onClick={handleNotesOpen}
+                            style={{
+                                padding: '6px 12px',
+                                background: '#17a2b8',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                marginLeft: '10px'
+                            }}
+                        >
+                            <i className="fas fa-sticky-note" style={{ marginRight: '6px' }}></i>
+                            Notes
+                        </button>
+                    )}
                 </div>
                 <div className="content">
                     <ContentView
@@ -853,6 +1180,97 @@ function FileManager({ currentPath, onNavigate }) {
                 onConfirm={confirmMove}
                 onCancel={cancelMove}
             />
+
+            {/* Notes Dialog */}
+            {showNotesDialog && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    zIndex: 2000
+                }}>
+                    <div style={{
+                        background: 'white',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                        width: '600px',
+                        maxWidth: '90vw',
+                        maxHeight: '80vh',
+                        display: 'flex',
+                        flexDirection: 'column'
+                    }}>
+                        <div style={{
+                            padding: '20px',
+                            borderBottom: '1px solid #e1e5e9',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                        }}>
+                            <h3 style={{ margin: 0, fontSize: '18px' }}>
+                                Notes for "{selectedFolder?.name}"
+                            </h3>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button
+                                    onClick={handleNotesCancel}
+                                    disabled={notesLoading}
+                                    style={{
+                                        padding: '8px 12px',
+                                        background: '#6c757d',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: notesLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    ✕
+                                </button>
+                                <button
+                                    onClick={handleNotesSave}
+                                    disabled={notesLoading}
+                                    style={{
+                                        padding: '8px 12px',
+                                        background: notesLoading ? '#6c757d' : '#28a745',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: notesLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    {notesLoading ? '...' : '✓'}
+                                </button>
+                            </div>
+                        </div>
+                        <div style={{ padding: '20px', flex: 1 }}>
+                            <textarea
+                                value={folderNotes}
+                                onChange={(e) => setFolderNotes(e.target.value)}
+                                placeholder="Add notes for this folder...\n\nYou can use basic markdown:\n- **bold text**\n- *italic text*\n- # Headers\n- - Lists"
+                                style={{
+                                    width: '100%',
+                                    height: '300px',
+                                    padding: '12px',
+                                    border: '1px solid #ddd',
+                                    borderRadius: '4px',
+                                    fontSize: '14px',
+                                    fontFamily: 'monospace',
+                                    resize: 'vertical',
+                                    minHeight: '200px',
+                                    maxHeight: '400px'
+                                }}
+                                disabled={notesLoading}
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
